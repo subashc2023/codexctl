@@ -2,7 +2,7 @@
 
 One CLI to route every model call to the cheapest place it can run.
 
-`codexctl` is a [Claude Code](https://claude.ai/code) skill that allows Claude to drive a local `codex app-server` control plane for both GPT and other models. Claude stays as the orchestrator under your Claude plan. Codex does agent work under your ChatGPT plan. OpenRouter covers everything else: pay-as-you-go models to cheap inference open models for long menial jobs, `:free` endpoints for trivial calls. One command, one usage log, and a stripped-down prompt that makes tiny calls actually tiny.
+`codexctl` is a skill that allows any SKILL compatible Harness to drive a local `codex app-server` control plane to orchestrate Codex sessions as subagents through their own shell/monitoring system. Your favorite Agent (Codex/ClaudeCode/Copilot) stays the orchestrator under your preferred payment plan. Subagents do agent work through Codex under their own plans. OpenRouter covers everything else: pay-as-you-go models to cheap inference open models for long menial jobs, `:free` endpoints for trivial calls. One command, one usage log, and a stripped-down prompt that makes tiny calls actually tiny.
 
 ```
 node scripts/codexctl.js run "Add unit tests for src/parser.ts and run them"
@@ -16,7 +16,7 @@ node scripts/codexctl.js compare "Write a launch tweet for this release. Plain, 
 
 Most setups run everything through one frontier model: the architecture call, the refactor, the summary of a giant log, the hook classifying a commit message. Same quota, same rate, whatever the difficulty.
 
-But i've found it best when using Fable to manage fleets of subagents of Astra, with both the main Claude session and the subagents having the capability to invoke their own subagents.
+But i've found it best when using Fable to manage fleets of subagents of Astra, with both the main Claude session and the subagents having the capability to invoke their own subagents. This allows independent compaction, complex planning, lower token usage, and better long-term session management, especially when used with Codex's experimental memory mnagement features (ask codex how to enable it. It's a game changer)
 
 codexctl tiers spend by how hard your own agent/harness thinks the work is:
 
