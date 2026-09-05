@@ -1,7 +1,7 @@
 ---
 name: codexctl
-description: One CLI for every other model and agent — drives the local `codex app-server` JSON-RPC control plane. Delegate coding tasks to Codex models (gpt-5.6-luna/terra/sol, gpt-6-astra) or to free OpenRouter models, resume/fork/steer/interrupt threads, get Codex code reviews; and make plain model calls with our own instructions: `ask` any model (Muse Spark, Gemini Flash, Sonnet, DeepSeek, Qwen, GLM, free chains), `compare` A/B/C prose variants, `map` cheap long-context jobs over big files, track spend. Use when the user says Codex, codexctl, "ask Codex/Gemini/DeepSeek/<model>", "have Codex do/review", "A/B test this copy", "compare models", "use a cheap/free model for", "run this over the whole file", or wants a second model's draft or opinion.
-argument-hint: [run|resume|review|ask|compare|map|list|show|serve] ...
+description: One CLI for every other model and agent — drives the local `codex app-server` JSON-RPC control plane. Delegate coding tasks to Codex models (gpt-5.6-luna/terra/sol, gpt-6-astra) or to free OpenRouter models, resume/fork/steer/interrupt threads, get Codex code reviews; and make plain model calls with our own instructions — `ask` any model (Muse Spark, Gemini Flash, Sonnet, DeepSeek, Qwen, GLM, free chains), `compare` A/B/C prose variants, `map` cheap long-context jobs over big files, track spend. Use when the user says Codex, codexctl, "ask Codex/Gemini/DeepSeek/<model>", "have Codex do/review", "A/B test this copy", "compare models", "use a cheap/free model for", "run this over the whole file", or wants a second model's draft or opinion.
+argument-hint: '[run|resume|review|ask|compare|map|list|show|serve] ...'
 allowed-tools: Bash(node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js *)
 ---
 
