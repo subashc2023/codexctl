@@ -25,7 +25,10 @@ const USAGE = `codexctl — Codex app-server control plane CLI (JSON out)
   schema                       regenerate references/protocol.md
 
 Options for run/resume/fork/review:
-  --model M           gpt-5.6-luna (default) | gpt-5.6-terra | gpt-5.6-sol | gpt-6-astra | ...
+  --model M[,M2,...]  gpt-5.6-luna (default) | gpt-5.6-terra | gpt-5.6-sol | gpt-6-astra | ... (run: comma list = fallback chain; "free" = OpenRouter free chain)
+  --provider P        model provider id from ~/.codex/config.toml [model_providers.*] (e.g. openrouter; then --model is an OpenRouter id)
+  --config k=v        codex -c override for this invocation (repeatable; forces a private server). e.g. --config model_providers.x.base_url=http://127.0.0.1:8787/v1
+  --lean | --no-lean  drop app connectors, sub-agents, node_repl, browser/computer use from the prompt (~490 KB -> ~51 KB per request). Default on with --provider
   --effort E          low (default) | medium | high | xhigh | max
   --cwd DIR           working directory (default: current)
   --sandbox S         workspace-write (default) | read-only | danger-full-access
@@ -42,17 +45,29 @@ Options for run/resume/fork/review:
   --ws URL | --no-ws  shared server URL (default ${DEFAULT_WS}) / force private stdio server
 `;
 
+// `--model free` = the OpenRouter :free models that completed a fix-and-verify agent task through Codex on 2026-09-05,
+// fastest first. They need `[model_providers.openrouter]` in ~/.codex/config.toml (see SKILL.md).
+const MODEL_CHAINS = {
+  free: { provider: "openrouter", models: ["nvidia/nemotron-3.5-lightning:free", "minimax/minimax-m2.7:free", "inclusionai/ling-3.0-flash-sante:free", "nvidia/nemotron-3-super-120b-a12b:free", "dots-studio/dots-3-note-preview:free"] },
+};
+
+const LEAN_OVERRIDES = [
+  "features.apps=false", "features.multi_agent=false", "features.browser_use=false", "features.computer_use=false",
+  "tools.web_search=false", "mcp_servers.node_repl.enabled=false", "include_apps_instructions=false",
+];
+
 // ---- arg parsing ------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { _: [], image: [] };
+  const o = { _: [], image: [], config: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--") { o._.push(...argv.slice(i + 1)); break; }
     if (a.startsWith("--")) {
       const k = a.slice(2);
-      const flags = ["ephemeral", "detach", "stream", "text", "no-ws", "stop", "status", "help", "verbose", "json"];
+      const flags = ["ephemeral", "detach", "stream", "text", "no-ws", "stop", "status", "help", "verbose", "json", "lean", "no-lean"];
       if (flags.includes(k)) o[k] = true;
       else if (k === "image") o.image.push(argv[++i]);
+      else if (k === "config") o.config.push(argv[++i]);
       else o[k] = argv[++i];
     } else o._.push(a);
   }
@@ -72,7 +87,12 @@ function sandboxPolicy(s, cwd) {
 async function connect(o, name = "codexctl") {
   let journal = null;
   if (o.journal) { const fd = fs.openSync(o.journal, "a"); journal = (e) => fs.writeSync(fd, JSON.stringify(e) + "\n"); }
-  const c = new CodexClient({ ws: o["no-ws"] ? false : o.ws, decision: o.decide || "accept", journal, verbose: !!o.verbose });
+  // --config overrides only reach a private stdio server (a shared `serve` server was configured when it started).
+  // --lean (default whenever --provider is set) drops the ChatGPT app connectors, sub-agents, node_repl, browser and
+  // computer use: measured 2026-09-05, that cuts each request from ~490 KB / 137k tokens to ~51 KB / 14k tokens.
+  const lean = o.lean || (o.provider && !o["no-lean"]);
+  const extraArgs = [...(lean ? LEAN_OVERRIDES : []), ...o.config].flatMap((kv) => ["-c", kv]);
+  const c = new CodexClient({ ws: o["no-ws"] || extraArgs.length ? false : o.ws, decision: o.decide || "accept", journal, verbose: !!o.verbose, extraArgs });
   await c.connect();
   await c.init(name);
   return c;
@@ -92,7 +112,12 @@ function inputOf(o, prompt) {
 }
 
 function threadStartParams(o, cwd) {
-  return { model: o.model || "gpt-5.6-luna", cwd, sandbox: o.sandbox || "workspace-write", approvalPolicy: o.approval || "on-request", ephemeral: !!o.ephemeral, threadSource: "exec", personality: "pragmatic" };
+  return { model: o.model || "gpt-5.6-luna", cwd, sandbox: o.sandbox || "workspace-write", approvalPolicy: o.approval || "on-request", ephemeral: !!o.ephemeral, threadSource: "exec", personality: "pragmatic", ...providerOf(o) };
+}
+
+// --provider names a [model_providers.<id>] entry from ~/.codex/config.toml (e.g. openrouter).
+function providerOf(o) {
+  return o.provider ? { modelProvider: o.provider } : {};
 }
 
 function finish(o, r, c) {
@@ -124,17 +149,33 @@ const commands = {
     const prompt = o._[0]; if (!prompt) fail("run needs a prompt");
     const cwd = abs(o.cwd);
     const c = await connect(o);
-    const th = await c.request("thread/start", threadStartParams(o, cwd));
-    if (o["result-file"]) fs.writeFileSync(o["result-file"] + ".thread", th.thread.id);
-    const r = await runTurn(c, th.thread.id, inputOf(o, prompt), { turnParams: turnParams(o), timeoutMs: (Number(o.timeout) || 600) * 1000, onDelta: o.stream ? (d) => process.stderr.write(d) : null });
+    // --model a,b,c is a fallback chain: a thread whose turn fails before producing anything (429, provider error)
+    // is retried on the next model in a fresh thread.
+    const alias = MODEL_CHAINS[o.model];
+    if (alias && !o.provider) o.provider = alias.provider;
+    const chain = alias ? alias.models : String(o.model || "gpt-5.6-luna").split(",").map((s) => s.trim()).filter(Boolean);
+    const attempts = [];
+    let th, r;
+    for (let i = 0; i < chain.length; i++) {
+      const oi = { ...o, model: chain[i] };
+      th = await c.request("thread/start", threadStartParams(oi, cwd));
+      if (o["result-file"]) fs.writeFileSync(o["result-file"] + ".thread", th.thread.id);
+      r = await runTurn(c, th.thread.id, inputOf(o, prompt), { turnParams: turnParams(oi), timeoutMs: (Number(o.timeout) || 600) * 1000, onDelta: o.stream ? (d) => process.stderr.write(d) : null });
+      const produced = r.items.some((it) => it.type !== "userMessage" && it.type !== "reasoning");
+      if (r.status === "completed" || produced || i === chain.length - 1) break;
+      const why = String(r.error?.message || JSON.stringify(r.error) || r.status).replace(/\s+/g, " ").slice(0, 160);
+      attempts.push({ model: chain[i], threadId: th.thread.id, error: why });
+      process.stderr.write(`${chain[i]} failed (${why}), falling back to ${chain[i + 1]}\n`);
+    }
     r.model = th.thread.model; r.cwd = cwd;
+    if (attempts.length) { r.requested = chain[0]; r.attempts = attempts; }
     if (o["result-file"]) fs.writeFileSync(o["result-file"], JSON.stringify(r, null, 2));
     finish(o, r, c);
   },
   async resume(o) {
     const [threadId, prompt] = o._; if (!threadId || !prompt) fail("resume needs THREAD and prompt");
     const c = await connect(o);
-    const rs = await c.request("thread/resume", { threadId, excludeTurns: true, ...(o.model ? { model: o.model } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.approval ? { approvalPolicy: o.approval } : {}) });
+    const rs = await c.request("thread/resume", { threadId, excludeTurns: true, ...(o.model ? { model: o.model } : {}), ...providerOf(o), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.approval ? { approvalPolicy: o.approval } : {}) });
     const r = await runTurn(c, threadId, inputOf(o, prompt), { turnParams: turnParams(o), timeoutMs: (Number(o.timeout) || 600) * 1000, onDelta: o.stream ? (d) => process.stderr.write(d) : null });
     r.model = rs.thread?.model; r.cwd = rs.thread?.cwd;
     if (o["result-file"]) fs.writeFileSync(o["result-file"], JSON.stringify(r, null, 2));
@@ -143,7 +184,7 @@ const commands = {
   async fork(o) {
     const [threadId, prompt] = o._; if (!threadId || !prompt) fail("fork needs THREAD and prompt");
     const c = await connect(o);
-    const fk = await c.request("thread/fork", { threadId, excludeTurns: true, threadSource: "exec", ...(o.model ? { model: o.model } : {}), ...(o.cwd ? { cwd: abs(o.cwd) } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}) });
+    const fk = await c.request("thread/fork", { threadId, excludeTurns: true, threadSource: "exec", ...(o.model ? { model: o.model } : {}), ...providerOf(o), ...(o.cwd ? { cwd: abs(o.cwd) } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}) });
     const r = await runTurn(c, fk.thread.id, inputOf(o, prompt), { turnParams: turnParams(o), timeoutMs: (Number(o.timeout) || 600) * 1000 });
     r.forkedFrom = threadId; r.model = fk.thread.model;
     finish(o, r, c);
