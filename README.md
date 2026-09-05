@@ -4,7 +4,7 @@ One CLI to route every model call to the cheapest place it can run.
 
 `codexctl` is a skill that allows any SKILL compatible Harness to drive a local `codex app-server` control plane to orchestrate Codex sessions as subagents through their own shell/monitoring system. Your favorite Agent (Codex/ClaudeCode/Copilot) stays the orchestrator under your preferred payment plan. Subagents do agent work through Codex under their own plans. OpenRouter covers everything else: pay-as-you-go models to cheap inference open models for long menial jobs, `:free` endpoints for trivial calls. One command, one usage log, and a stripped-down prompt that makes tiny calls actually tiny.
 
-![codexctl](assets/cc42bcc4-9084-405f-930a-d04e0f98bb1f.png)
+![codexctl](assets/codexctl.png)
 
 ```
 node scripts/codexctl.js run "Add unit tests for src/parser.ts and run them"
