@@ -40,6 +40,10 @@ node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js review --cwd .
 # structured answer
 node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js run --schema schema.json --text "Classify each file in src/ as core or util"
 
+# free OpenRouter models as the agent (chain: falls through on 429/provider error; --lean prompt is automatic)
+node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js run --model free --cwd . "Add a --dry-run flag to bin/cleanup.py and run its tests"
+node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js run --provider openrouter --model "deepseek/deepseek-v4,nvidia/nemotron-3.5-lightning:free" --cwd . "..."
+
 # long task in the background: returns {pid, journal, resultFile}; poll resultFile
 node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js serve
 node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js run --detach --model gpt-5.6-sol --effort medium "Port the build to pnpm workspaces"
@@ -63,8 +67,13 @@ node ${CLAUDE_SKILL_DIR}/scripts/codexctl.js exec --cwd . -- python -m pytest -q
 | medium refactors, reviews | `gpt-5.6-terra --effort medium` |
 | harder reasoning, second opinions | `gpt-5.6-sol --effort high` |
 | the user's default heavy model | `gpt-6-astra` (efforts up to `ultra`; expensive) |
+| $0, throwaway or public code, no ChatGPT quota | `--model free` (OpenRouter free chain via `--provider openrouter`) |
 
 On short tasks effort mostly adds latency, not quality. Ask `models` for the live list.
+
+## Other providers
+
+`--provider P` uses `[model_providers.P]` from `~/.codex/config.toml` (must be `wire_api = "responses"`; `openrouter` is configured). `--model` is then a provider model id, or a comma chain tried in order in fresh threads. `--provider` turns on `--lean`, which strips the connected-app tool schemas (~490 KB -> ~51 KB per request); add `--no-lean` to keep them. Free endpoints may log prompts: never point them at private or client repos. Details and the probed model table: [references/findings.md](references/findings.md).
 
 ## Rules of thumb
 
