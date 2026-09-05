@@ -49,8 +49,14 @@ class CodexClient extends EventEmitter {
       let i;
       while ((i = this.buf.indexOf("\n")) >= 0) { const line = this.buf.slice(0, i); this.buf = this.buf.slice(i + 1); if (line.trim()) this.dispatchLine(line); }
     });
-    this.child.stderr.on("data", (d) => { if (this.opts.verbose) process.stderr.write("[app-server] " + d); });
-    this.child.on("exit", (c, s) => this.emit("exit", c, s));
+    this.child.stderr.on("data", (d) => { this.stderrTail = ((this.stderrTail || "") + d).slice(-2000); if (this.opts.verbose) process.stderr.write("[app-server] " + d); });
+    this.child.on("exit", (c, s) => {
+      // A bad -c override makes the server exit at once; fail pending requests with its stderr instead of timing out.
+      const why = `app-server exited (code ${c}${s ? `, ${s}` : ""}): ${(this.stderrTail || "").trim().replace(/\s+/g, " ").slice(-400) || "no stderr"}`;
+      for (const p of this.pending.values()) p.reject(new Error(why));
+      this.pending.clear();
+      this.emit("exit", c, s);
+    });
   }
 
   raw(obj) {
