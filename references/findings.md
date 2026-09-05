@@ -59,3 +59,27 @@ Token totals are dominated by the ~17k-token system prompt; cached input tokens 
 - `account/rateLimits/read` → `primary.usedPercent`, `windowDurationMins` (10080 = weekly), `resetsAt`. `account/read` → plan type and email.
 - `model/list` → ids with `supportedReasoningEfforts`. Known ids: gpt-6-astra (default, ultra effort), gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4-mini, gpt-5.3-codex-spark, gpt-reserve, codex-auto-review.
 - `~/.codex/config.toml` sets the default model and `approvals_reviewer`; thread rollouts live under `~/.codex/sessions/YYYY/MM/DD/`.
+
+## Third-party models via OpenRouter (probed 2026-09-05, codex-cli 0.153.4)
+
+- `wire_api = "chat"` is gone in this version; a provider must speak the Responses API. OpenRouter's `/api/v1/responses` works, including function calls and streaming, so `[model_providers.openrouter]` with `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`, `wire_api = "responses"` is enough. Pass `modelProvider: "openrouter"` on `thread/start` (`codexctl --provider openrouter`).
+- Unknown model ids get "fallback metadata" (warning event, 258k context assumed). Third-party models get `exec_command`/`write_stdin` only, no `apply_patch`; every model edited files through PowerShell one-liners and that was fine.
+- **Prompt size is the real cost.** With the user's connected ChatGPT apps, each request carried ~490 KB: 424 KB of tool schemas (GitHub 78 KB, Notion 73 KB, Figma 65 KB, Drive 63 KB, Gmail 45 KB, Sites 35 KB, ...), 17 KB base instructions, 28 KB skills list, 5 KB "recommended plugins". That is ~137k input tokens per request and ~10 s upload latency. `-c features.apps=false features.multi_agent=false features.browser_use=false features.computer_use=false tools.web_search=false mcp_servers.node_repl.enabled=false include_apps_instructions=false` brings it to ~51 KB / ~14k tokens and ~3 s per request; the same task went from 67 s to 33 s. `codexctl --lean` applies exactly this set (default with `--provider`).
+- App-server has no `--profile`; overrides go in as `-c key=value` on the spawned process, so they only reach a private stdio server, never a shared `serve` one.
+- Fix-and-verify task (find bug in `mathlib.py`, fix, run python to verify), full prompt, effort low, 3 concurrent:
+
+  | model | result | wall | shell calls |
+  |---|---|---|---|
+  | nvidia/nemotron-3.5-lightning:free | fixed + verified | 67 s (33 s lean) | 4 |
+  | minimax/minimax-m2.7:free | fixed + verified | 45 s | 3 |
+  | inclusionai/ling-3.0-flash-sante:free | fixed + verified | 78 s | 6 |
+  | nvidia/nemotron-3-super-120b-a12b:free | fixed + verified | 94 s | 5 |
+  | dots-studio/dots-3-note-preview:free | fixed + verified | 110 s | 8 |
+  | nvidia/nemotron-3-ultra-550b-a55b:free | fixed + verified | 158 s | 5 |
+  | cohere/north-mini-code:free | fixed + verified | 190 s | 17 (fought PowerShell quoting) |
+  | minimax/minimax-m3:free | no fix | timeout / ended turn after "Patching now" | 0-3 |
+  | z-ai/glm-5.2:free, google/gemma-4-31b-it:free | 429 | "temporarily rate-limited upstream" on the Responses path all day | 0 |
+  | poolside/laguna-s-2.1:free | 429 | tiny direct call works, agent-sized request does not | 0-1 |
+
+- 429s come back in 1-2 s ("exceeded retry limit"); Codex does not switch models. `codexctl run --model a,b,c` starts a fresh thread on the next model when a turn fails before producing any item; `--model free` is the chain of the models above that passed, fastest first.
+- Cost: every free call reported `cost: 0` in OpenRouter usage. Free endpoints may log prompts; keep private repos on paid or OpenAI models.
